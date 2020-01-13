@@ -39,7 +39,7 @@ public class Minimizer {
         DFA dfa = new DFA();
 
         dfa.getStates().addAll(reachableStates.stream().map(State::copy).collect(Collectors.toList()));
-        List<Integer> reachableStateIds = reachableStates.stream().map(state -> state.getId()).collect(Collectors.toList());
+        List<Integer> reachableStateIds = reachableStates.stream().map(State::getId).collect(Collectors.toList());
         List<Integer> finalStateIds = initialDfa.getFinalStateIds().stream().filter(reachableStateIds::contains).collect(Collectors.toList());
 
         dfa.getFinalStateIds().addAll(finalStateIds);

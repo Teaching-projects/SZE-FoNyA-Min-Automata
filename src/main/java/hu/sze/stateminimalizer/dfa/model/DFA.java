@@ -16,11 +16,11 @@ public class DFA {
     private Set<Integer> finalStateIds = new LinkedHashSet<>();
 
     public State getInitialState(){
-      return states.stream().filter(state -> state.id == INITIAL_STATE_ID).findAny().orElseThrow(() -> new IllegalStateException("Unknown initialState"));
+      return states.stream().filter(state -> state.getId() == INITIAL_STATE_ID).findAny().orElseThrow(() -> new IllegalStateException("Unknown initialState"));
     }
 
     public List<State> getFinalStates(){
-        return states.stream().filter(state -> finalStateIds.contains(state.id)).collect(Collectors.toList());
+        return states.stream().filter(state -> finalStateIds.contains(state.getId())).collect(Collectors.toList());
     }
 
     public Set<String> getInputSymbols() {
