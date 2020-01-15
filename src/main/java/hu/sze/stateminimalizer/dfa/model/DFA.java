@@ -1,6 +1,9 @@
 package hu.sze.stateminimalizer.dfa.model;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -11,7 +14,7 @@ public class DFA {
 
     private Set<String> inputSymbols = new LinkedHashSet<>();
 
-    private List<State> states = new LinkedList<>();
+    private List<State> states = new ArrayList<>();
 
     private Set<Integer> finalStateIds = new LinkedHashSet<>();
 

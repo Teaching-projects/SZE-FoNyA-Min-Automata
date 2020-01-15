@@ -6,8 +6,18 @@ import hu.sze.stateminimalizer.dfa.model.DFA;
 import hu.sze.stateminimalizer.dfa.model.State;
 import org.apache.commons.lang3.StringUtils;
 
-import java.io.*;
-import java.util.*;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class CSVToDFAProcessor {
 
@@ -70,7 +80,7 @@ public class CSVToDFAProcessor {
 
     private void fillStateTransitions(Map<String, State> stateNameMap, List<String> inputSymbolList, String[] row, State state) {
         for(int inputSymbolIndex = 0; inputSymbolIndex < inputSymbolList.size(); inputSymbolIndex++){
-            String targetStateId = row[inputSymbolIndex+1];
+            String targetStateId = inputSymbolIndex < row.length-1  ? row[inputSymbolIndex+1] : null;
             State targetState = stateNameMap.get(targetStateId);
             if (targetState != null) { //has transition
                 state.getTransitions().put(inputSymbolList.get(inputSymbolIndex), targetState);

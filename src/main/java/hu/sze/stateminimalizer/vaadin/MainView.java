@@ -2,7 +2,7 @@ package hu.sze.stateminimalizer.vaadin;
 
 
 import com.vaadin.flow.component.Component;
-import com.vaadin.flow.component.HasStyle;
+import com.vaadin.flow.component.HasElement;
 import com.vaadin.flow.component.button.Button;
 import com.vaadin.flow.component.html.Anchor;
 import com.vaadin.flow.component.html.H2;
@@ -31,6 +31,7 @@ import java.util.stream.Collectors;
 public class MainView extends HorizontalLayout {
 
     private static final String CELL_SIZE = "3em";
+    public static final String RED_X_TITLE = "Piros: végállapot vs. nem végállapot";
 
     private final Button startButton = new Button("Indítás");
     private final Button continueButton = new Button("Aktív event set-ek");
@@ -58,27 +59,6 @@ public class MainView extends HorizontalLayout {
         continueButton.setVisible(false);
 
         mainLayout.add(fileUploader, anchor, startButton, continueButton, errorLayout);
-    }
-
-    private Upload createFileUploader() {
-        MemoryBuffer memoryBuffer = new MemoryBuffer();
-
-        Upload fileUploader = new Upload();
-
-        fileUploader.setReceiver(memoryBuffer);
-        fileUploader.setAcceptedFileTypes(".csv");
-        fileUploader.setMaxFileSize(10000);
-        fileUploader.setAutoUpload(true);
-        fileUploader.setMaxFiles(1);
-        UploadI18N uploadI18N =new UploadI18N();
-        uploadI18N.setCancel("Mégsem");
-        uploadI18N.setUploading(new UploadI18N.Uploading().setStatus(new UploadI18N.Uploading.Status()));
-        uploadI18N.setAddFiles(new UploadI18N.AddFiles().setMany("Fájlok kiválasztása").setOne("Fájl kiválasztása"));
-        uploadI18N.setDropFiles(new UploadI18N.DropFiles().setMany("Fájlok idehúzása").setOne("Húzd ide a fájlt"));
-
-        fileUploader.setI18n(uploadI18N);
-        fileUploader.addSucceededListener(succeededEvent -> handleUploadedFile(memoryBuffer));
-        return fileUploader;
     }
 
     private void handleUploadedFile(MemoryBuffer memoryBuffer) {
@@ -128,60 +108,79 @@ public class MainView extends HorizontalLayout {
         add(treeLayout);
 
         startButton.setVisible(false);
-        minimizer = new Minimizer();
-        minimizer.minimize(dfa);
-
-        DFA minDfa = minimizer.minimize(dfa);
+        DFA minDfa = createReducedDfa();
 
         //System.out.println(minDfa);
 
+        addDfaDescription(minDfa);
+
+        addGrid(minDfa);
+    }
+
+    private void addGrid(DFA minDfa) {
+        Component redGrid = createGrid(minDfa, false);
+        treeLayout.add(redGrid);
+        continueButton.setVisible(true);
+        continueButton.addClickListener(buttonClickEvent -> {
+            treeLayout.remove(redGrid);
+            continueButton.setVisible(false);
+            treeLayout.add(createGrid(minDfa, true));
+        });
+    }
+
+    private void addDfaDescription(DFA minDfa) {
         mainLayout.add(new Label("Σ: " + String.join(", ", minDfa.getInputSymbols())));
         mainLayout.add(new Label("K: "+ minDfa.getStates().stream().map(State::getName).collect(Collectors.joining(", "))));
         mainLayout.add(new Label("S: "+ minDfa.getInitialState().getName()));
         mainLayout.add(new Label("F: "+ minDfa.getFinalStates().stream().map(State::getName).collect(Collectors.joining(", "))));
-
-        Component redTree = createTree(minDfa, false);
-        treeLayout.add(redTree);
-        continueButton.setVisible(true);
-        continueButton.addClickListener(buttonClickEvent -> {
-            treeLayout.remove(redTree);
-            continueButton.setVisible(false);
-            treeLayout.add(createTree(minDfa, true));
-        });
     }
 
-    private Component createTree(DFA dfa, boolean showFullTree){
-        VerticalLayout table = new VerticalLayout();
-        table.setSpacing(false);
+    private DFA createReducedDfa() {
+        minimizer = new Minimizer();
+        minimizer.minimize(dfa);
+
+        return minimizer.minimize(dfa);
+    }
+
+    private Component createGrid(DFA dfa, boolean showFullTree){
+        VerticalLayout gridLayout = new VerticalLayout();
+        gridLayout.setSpacing(false);
         for (int rowIndex = 0; rowIndex < dfa.getStates().size(); rowIndex++){
-            State rowState = dfa.getStates().get(rowIndex);
-            HorizontalLayout row = new HorizontalLayout();
-            row.setHeight(CELL_SIZE);
-            row.setAlignItems(Alignment.CENTER);
-            row.setSpacing(false);
-            for(int columnIndex = 0; columnIndex<rowIndex; columnIndex++){
-                Component cell = createCellComponent(dfa, rowIndex, rowState, columnIndex, showFullTree);
-                row.add(cell);
-            }
-            Label headerLabel = createCellLabel();
-            headerLabel.setText(rowState.getName());
-            headerLabel.getStyle().set("border", "none");
-            row.add(headerLabel);
-            table.add(row);
+            HorizontalLayout row = createRow(dfa, showFullTree, rowIndex);
+            gridLayout.add(row);
         }
-        return table;
+        return gridLayout;
+    }
+
+    private HorizontalLayout createRow(DFA dfa, boolean showFullTree, int rowIndex) {
+        State rowState = dfa.getStates().get(rowIndex);
+        HorizontalLayout row = new HorizontalLayout();
+
+        for(int columnIndex = 0; columnIndex<rowIndex; columnIndex++){
+            Component cell = createCellComponent(dfa, rowIndex, rowState, columnIndex, showFullTree);
+            row.add(cell);
+        }
+        Label headerLabel = createCellLabel();
+        headerLabel.setText(rowState.getName());
+        headerLabel.getStyle().set("border", "none");
+        row.add(headerLabel);
+
+        row.setHeight(CELL_SIZE);
+        row.setAlignItems(Alignment.CENTER);
+        row.setSpacing(false);
+        return row;
     }
 
     private Component createCellComponent(DFA dfa, int rowIndex, State rowState, int columnIndex, boolean showFull) {
         State columnState = dfa.getStates().get(columnIndex);
-        HasStyle cell;
+        HasElement cell;
         if(minimizer.isMarkedAsRed(rowState, columnState)){
             cell = createCellLabel();
-            fillXLabel((Label) cell, "Piros: végállapot vs. nem végállapot", "red");
+            fillXLabel((Label) cell, RED_X_TITLE, "red");
         } else if(showFull) {
             if (minimizer.isMarkedAsBlue(rowState, columnState)){
                 cell = createCellLabel();
-                fillXLabel((Label) cell, "Kék: eltérő event set: {" + minimizer.getActiveEventSet(rowState) + "} <-> {" + minimizer.getActiveEventSet(columnState) + "}", "blue");
+                fillXLabel((Label) cell, getBlueXTitle(rowState, columnState), "blue");
             } else {
                 cell = createButtonCell(rowState, columnState);
             }
@@ -189,12 +188,16 @@ public class MainView extends HorizontalLayout {
             cell = createCellLabel();
         }
         if(rowIndex != dfa.getStates().size() - 1){ //has more rows
-            cell.getStyle().set("border-bottom", "none");
+            cell.getElement().getStyle().set("border-bottom", "none");
         }
         if(columnIndex != rowIndex - 1){ //has more columns
-            cell.getStyle().set("border-right", "none");
+            cell.getElement().getStyle().set("border-right", "none");
         }
         return (Component) cell;
+    }
+
+    private String getBlueXTitle(State rowState, State columnState) {
+        return "Kék: eltérő event set: {" + minimizer.getActiveEventSet(rowState) + "} <-> {" + minimizer.getActiveEventSet(columnState) + "}";
     }
 
     private HorizontalLayout createButtonCell(State rowState, State columnState) {
@@ -210,7 +213,9 @@ public class MainView extends HorizontalLayout {
         horizontalLayout.getStyle().set("border", "1px solid black");
         horizontalLayout.getStyle().set("border-radius", "0 !important");
 
-        button.addClickListener(buttonClickEvent -> horizontalLayout.replace(button, new Label(String.valueOf(!minimizer.isMarked(rowState, columnState))))); //String.valueOf(minimizer.checkStateInSameGroup(rowState, columnState)))));
+        boolean isMarked = minimizer.isMarked(rowState, columnState);
+
+        button.addClickListener(buttonClickEvent -> horizontalLayout.replace(button, new Label(isMarked ? "X" : "")));
         return horizontalLayout;
     }
 
@@ -228,5 +233,31 @@ public class MainView extends HorizontalLayout {
         label.setText("X");
         label.getStyle().set("color", color);
         label.getElement().setAttribute("title", title);
+    }
+
+    private Upload createFileUploader() {
+        MemoryBuffer memoryBuffer = new MemoryBuffer();
+
+        Upload fileUploader = new Upload();
+
+        fileUploader.setReceiver(memoryBuffer);
+        fileUploader.setAcceptedFileTypes(".csv");
+        fileUploader.setMaxFileSize(10000);
+        fileUploader.setAutoUpload(true);
+        fileUploader.setMaxFiles(1);
+        UploadI18N uploadI18N = createUploadI18N();
+
+        fileUploader.setI18n(uploadI18N);
+        fileUploader.addSucceededListener(succeededEvent -> handleUploadedFile(memoryBuffer));
+        return fileUploader;
+    }
+
+    private UploadI18N createUploadI18N() {
+        UploadI18N uploadI18N =new UploadI18N();
+        uploadI18N.setCancel("Mégsem");
+        uploadI18N.setUploading(new UploadI18N.Uploading().setStatus(new UploadI18N.Uploading.Status()));
+        uploadI18N.setAddFiles(new UploadI18N.AddFiles().setMany("Fájlok kiválasztása").setOne("Fájl kiválasztása"));
+        uploadI18N.setDropFiles(new UploadI18N.DropFiles().setMany("Fájlok idehúzása").setOne("Húzd ide a fájlt"));
+        return uploadI18N;
     }
 }
