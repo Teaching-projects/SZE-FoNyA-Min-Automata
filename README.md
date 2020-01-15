@@ -1,0 +1,1 @@
+# SZE-FoNyA-Min-Automata
