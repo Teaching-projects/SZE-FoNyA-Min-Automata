@@ -137,8 +137,6 @@ public class MainView extends HorizontalLayout {
 
     private DFA createReducedDfa() {
         minimizer = new Minimizer();
-        minimizer.minimize(dfa);
-
         return minimizer.minimize(dfa);
     }
 
