@@ -2,103 +2,189 @@ package hu.sze.stateminimalizer.dfa;
 
 import hu.sze.stateminimalizer.dfa.model.DFA;
 import hu.sze.stateminimalizer.dfa.model.State;
-import org.apache.commons.lang3.StringUtils;
+import hu.sze.stateminimalizer.dfa.model.StateGroup;
 import org.apache.commons.lang3.tuple.Pair;
 
-import javax.swing.plaf.basic.BasicScrollPaneUI;
 import java.util.*;
 import java.util.stream.Collectors;
 
 public class Minimizer {
 
-    private final DFA initialDfa;
-    private DFA reducedDfa;
-    private ArrayList<Set<State>> currentStateGroups;
-    private Map<State, String> stateActiveEventSetMap;
-    List<Pair<State, State>> conflicts = new ArrayList<>();
-    Map<Pair<String, State>, Integer> stateGroupTransitionMap = new HashMap<>();
+    private ArrayList<Pair<Integer, Integer>> redMarked = new ArrayList<>();
+    private ArrayList<Pair<Integer, Integer>> blueMarked = new ArrayList<>();
+    private int currentStateGroupIndex = 0;
+    private ArrayList<Pair<Integer, Integer>> marked;
+    private Map<String, StateGroup> finalStateEventSetMap;
+    private Map<String, StateGroup> nonFinalStateEventSetMap;
+    private DFA dfa;
+    private List<Pair<Integer, Integer>> pairs;
 
+    public DFA minimize(DFA initialDfa){
+        dfa = reduceByUnreachableStates(initialDfa);
+        marked = new ArrayList<>();
 
+        dfa.getStates().stream().filter(state -> !dfa.getFinalStateIds().contains(state.getId()))
+                .forEach(state -> {
+                    dfa.getFinalStateIds().forEach(finalStateId -> marked.add(Pair.of(state.getId(), finalStateId)));
+                });
+        redMarked.addAll(marked);
+        pairs = createStatePairs();
 
-    public Minimizer(DFA dfa) {
-        this.initialDfa = dfa;
-    }
+        setupStateGroupsByEventSets();
 
-    public DFA minimize(){
-        return new DFA();
-    }
+        Map<Pair<Integer, Integer>, List<Pair<Integer, Integer>>> dependentPairs = new HashMap<>();
+        pairs.stream().filter(statePair -> !marked.contains(statePair) && !marked.contains(Pair.of(statePair.getRight(), statePair.getLeft())))
+                .forEachOrdered(statePair -> {
+                    checkPair(statePair, dependentPairs);
+                });
+        List<StateGroup> minimalizedGroups = new ArrayList<>();
 
+        for(int rowIndex = 0; rowIndex< dfa.getStates().size(); rowIndex++){
+            State rowState = dfa.getStates().get(rowIndex);
+            for(int columnIndex = rowIndex+1; columnIndex < dfa.getStates().size()-1; columnIndex++ ){
+                State columnState = dfa.getStates().get(columnIndex);
+               if(!isMarked(rowState, columnState)){
+                   minimalizedGroups.stream()
+                           .filter(stateGroup -> stateGroup.states.contains(rowState)).findFirst()
+                           .ifPresentOrElse(stateGroup -> stateGroup.states.add(columnState),
+                                   () -> {
+                               StateGroup newStateGroup = createStateGroup();
+                               newStateGroup.states.add(rowState);
+                               newStateGroup.states.add(columnState);
+                               minimalizedGroups.add(newStateGroup);
+                   });
 
-    public DFA reduceByUnreachableStates(){
-        List<State> reachableStates = extractReachableStates(initialDfa);
-        this.reducedDfa = buildReducedDfa(reachableStates);
-        return reducedDfa;
-    }
+               }
+            }
+        }
 
-    private DFA buildReducedDfa(List<State> reachableStates) {
-        DFA dfa = new DFA();
+        System.out.println("final groups: ");
+        minimalizedGroups.forEach(stateGroup -> System.out.println(stateGroup.toString()));
 
-        dfa.getStates().addAll(reachableStates.stream().map(State::copy).collect(Collectors.toList()));
-        List<Integer> reachableStateIds = reachableStates.stream().map(State::getId).collect(Collectors.toList());
-        List<Integer> finalStateIds = initialDfa.getFinalStateIds().stream().filter(reachableStateIds::contains).collect(Collectors.toList());
-
-        dfa.getFinalStateIds().addAll(finalStateIds);
-        dfa.getInputSymbols().addAll(initialDfa.getInputSymbols());
         return dfa;
     }
 
-    public void groupByIsFinalState(){
-        Pair<Set<State>, Set<State>> pair = collectFinalAndNonFinalStates(reducedDfa);
-        this.currentStateGroups = new ArrayList<>();
-        this.currentStateGroups.add(pair.getLeft());
-        this.currentStateGroups.add(pair.getRight());
-    }
+    private void setupStateGroupsByEventSets() {
+        StateGroup finalStates = createStateGroup();
+        finalStates.states.addAll(dfa.getFinalStates());
 
-    /**
-     *
-     * @return state-event set matching
-     */
-    public void groupByEventSet(){
-        Map<State, String> stateStringMap = new HashMap<>();
+        StateGroup nonFinalStates = createStateGroup();
+        nonFinalStates.states.addAll(dfa.getStates().stream().filter(state -> !dfa.getFinalStateIds().contains( state.getId())).collect(Collectors.toList()));
 
-        ArrayList<Set<State>> newStateGroups = new ArrayList<>();
-        currentStateGroups.forEach(stateGroup -> {
-            Map<String, Set<State>> eventSetMap = groupByEventSet(stateGroup);
-            eventSetMap.forEach((eventSet, states) -> {
-                newStateGroups.add(states);
-                states.forEach(state -> stateStringMap.put(state, eventSet));
-            });
-        });
-        currentStateGroups = newStateGroups;
-        stateActiveEventSetMap = stateStringMap;
-    }
+        finalStateEventSetMap = createStateGroupsByEvent(finalStates.states);
+        nonFinalStateEventSetMap = createStateGroupsByEvent(nonFinalStates.states);
 
-    private Map<String, Set<State>> groupByEventSet(Set<State> states){
-        Map<String, Set<State>> eventSet = new HashMap<>();
-        for(State state : states){
-            StringJoiner sb = new StringJoiner(",");
-            state.getTransitions().keySet().forEach(sb::add);
-            String key = sb.toString();
-            if(eventSet.containsKey(key)){
-                eventSet.get(key).add(state);
-            } else {
-                Set<State> stateGroup = new LinkedHashSet<>();
-                stateGroup.add(state);
-                eventSet.put(key, stateGroup);
+        pairs.stream().filter(statePair -> !marked.contains(statePair)).forEachOrdered(statePair -> {
+            int stateGroupIdA = findEventSetGroup(statePair.getLeft()).getValue().id;
+            int stateGroupIdB = findEventSetGroup(statePair.getRight()).getValue().id;
+            if(stateGroupIdA != stateGroupIdB){
+                blueMarked.add(statePair);
             }
-        }
-        System.out.println("Event set alapjan tovabb bontasok: ");
-        System.out.println(eventSet);
-        return eventSet;
+        });
+        marked.addAll(blueMarked);
     }
 
-    private Pair<Set<State>, Set<State>> collectFinalAndNonFinalStates(DFA dfa){
-        Set<State> finalStates = new LinkedHashSet<>(dfa.getFinalStates());
-        Set<State> nonFinalStates = dfa.getStates().stream().filter(state -> !finalStates.contains(state)).collect(Collectors.toCollection(LinkedHashSet::new));
-        System.out.println("Piros x-ek alapja:");
-        System.out.println("Vegallapot(ok):" + finalStates);
-        System.out.println("Nem vegallapotok: "+ nonFinalStates);
-        return Pair.of(finalStates, nonFinalStates);
+    private Map.Entry<String, StateGroup> findEventSetGroup(Integer stateId) {
+        State state = dfa.getStates().stream().filter(dfaState -> dfaState.getId() == stateId).findFirst().get();
+        Map<String, StateGroup> eventSetGroup = null;
+        if(dfa.getFinalStateIds().contains(stateId)){
+            eventSetGroup = finalStateEventSetMap;
+        } else {
+            eventSetGroup = nonFinalStateEventSetMap;
+        }
+        return eventSetGroup.entrySet().stream().filter(entry -> entry.getValue().states.contains(state)).findFirst().get();
+
+    }
+
+    private void checkPair(Pair<Integer, Integer> statePair, Map<Pair<Integer, Integer>, List<Pair<Integer, Integer>>> dependentPairs) {
+        dfa.getStates().stream().filter(state -> state.getId()==statePair.getLeft()).forEach(stateA -> {
+            for (Map.Entry<String, State> entry : stateA.getTransitions().entrySet()) {
+                String inputSymbol = entry.getKey();
+                State targetStateA = entry.getValue();
+                State stateB = dfa.getStates().stream().filter(state -> state.getId() == statePair.getRight()).findFirst().get();
+                State targetStateB = stateB.getTransitions().get(inputSymbol);
+                if(isNeedToBeMarked(finalStateEventSetMap, nonFinalStateEventSetMap, statePair, targetStateA, targetStateB)) {
+                    mark(statePair, dependentPairs);
+                } else {
+                    addAsDependent(statePair, dependentPairs, targetStateA, targetStateB);
+                }
+            }
+        });
+    }
+
+    private void addAsDependent(Pair<Integer, Integer> statePair, Map<Pair<Integer, Integer>, List<Pair<Integer, Integer>>> dependentPairs, State targetStateA, State targetStateB) {
+        dependentPairs.compute(Pair.of(targetStateA.getId(), targetStateB.getId()), (owner, dependentPairList) -> {
+            if(dependentPairList != null){
+                dependentPairList.add(statePair);
+                return dependentPairList;
+            } else {
+                List<Pair<Integer, Integer>> dependents = new ArrayList<>();
+                dependents.add(statePair);
+                return dependents;
+            }
+        });
+    }
+
+    private boolean isNeedToBeMarked(Map<String, StateGroup> finalStateEventSetMap, Map<String, StateGroup> nonFinalStateEventSetMap, Pair<Integer, Integer> statePair, State targetStateA, State targetStateB) {
+        if(marked.contains(Pair.of(targetStateA.getId(), targetStateB.getId())) || marked.contains(Pair.of(targetStateB.getId(), targetStateA.getId()))){
+            return true;
+        } else {
+               StateGroup targetStateGroupA = findStateGroup(targetStateA, finalStateEventSetMap, nonFinalStateEventSetMap);
+               StateGroup targetStateGroupB = findStateGroup(targetStateB, finalStateEventSetMap, nonFinalStateEventSetMap);
+               return targetStateGroupA.id != targetStateGroupB.id;
+        }
+    }
+
+    private void mark(Pair<Integer, Integer> statePair, Map<Pair<Integer, Integer>, List<Pair<Integer, Integer>>> dependentPairs){
+        marked.add(statePair);
+        if(dependentPairs.containsKey(statePair)){
+            marked.addAll(getDependentsPairsRecursive(statePair, dependentPairs));
+        }
+    }
+
+    private StateGroup findStateGroup(State state, Map<String, StateGroup> finalStateEventSetMap, Map<String, StateGroup> nonFinalStateEventSetMap) {
+        return finalStateEventSetMap.values().stream()
+                .filter(stateGroup -> stateGroup.states.contains(state))
+                .findAny()
+                .orElseGet(() -> nonFinalStateEventSetMap.values().stream()
+                        .filter(stateGroup -> stateGroup.states.contains(state))
+                        .findAny().get());
+        }
+
+    private List<Pair<Integer, Integer>> getDependentsPairsRecursive(Pair<Integer, Integer> owner, Map<Pair<Integer, Integer>, List<Pair<Integer, Integer>>> dependentPairs){
+        List<Pair<Integer, Integer>> pairs = new ArrayList<>();
+        dependentPairs.get(owner).forEach(dependentPair -> {
+            pairs.add(dependentPair);
+            pairs.addAll(getDependentsPairsRecursive(dependentPair, dependentPairs));
+        });
+        return pairs;
+    }
+
+    private StateGroup createStateGroup() {
+        return new StateGroup(currentStateGroupIndex++);
+    }
+
+    public boolean isMarkedAsRed(State stateA, State stateB){
+        return redMarked.contains(Pair.of(stateA.getId(), stateB.getId())) || redMarked.contains(Pair.of(stateB.getId(), stateA.getId()));
+    }
+
+    public boolean isMarkedAsBlue(State stateA, State stateB){
+        return blueMarked.contains(Pair.of(stateA.getId(), stateB.getId())) || blueMarked.contains(Pair.of(stateB.getId(), stateA.getId()));
+    }
+
+    public boolean isMarked(State stateA, State stateB) {
+        return marked.contains(Pair.of(stateA.getId(), stateB.getId())) || marked.contains(Pair.of(stateB.getId(), stateA.getId()));
+    }
+
+
+
+    public String getActiveEventSet(State state){
+       return findEventSetGroup(state.getId()).getKey();
+    }
+
+    public DFA reduceByUnreachableStates(DFA initialDfa){
+        List<State> reachableStates = extractReachableStates(initialDfa);
+        return buildReducedDfa(reachableStates, initialDfa);
     }
 
     /**
@@ -124,53 +210,46 @@ public class Minimizer {
         return reachableStates;
     }
 
-    public int stateGorupsSize(){
-        return currentStateGroups.size();
+    private DFA buildReducedDfa(List<State> reachableStates, DFA initialDfa) {
+        DFA dfa = new DFA();
+
+        dfa.getStates().addAll(reachableStates.stream().map(State::copy).collect(Collectors.toList()));
+        List<Integer> reachableStateIds = reachableStates.stream().map(State::getId).collect(Collectors.toList());
+        List<Integer> finalStateIds = initialDfa.getFinalStateIds().stream().filter(reachableStateIds::contains).collect(Collectors.toList());
+
+        dfa.getFinalStateIds().addAll(finalStateIds);
+        dfa.getInputSymbols().addAll(initialDfa.getInputSymbols());
+        return dfa;
     }
 
-    public boolean isSameActiveEventSet(State rowState, State columnState) {
-        return Objects.equals(getActiveEventSet(rowState), getActiveEventSet(columnState));
-    }
-
-    public String getActiveEventSet(State state){
-        return stateActiveEventSetMap.get(state);
-    }
-
-    public boolean mergeableByIsFinal(State stateA, State stateB){
-        boolean isFinalA = reducedDfa.getFinalStateIds().contains(stateA.getId());
-        boolean isFinalB = reducedDfa.getFinalStateIds().contains(stateB.getId());
-        return (isFinalA && isFinalB) || (!isFinalA && !isFinalB);
-    }
-
-    public boolean isMergeableByTargetStates(State stateA, State stateB){
-        if(conflicts.contains(Pair.of(stateA, stateB)) || conflicts.contains(Pair.of(stateB, stateA))){
-            return false;
-        }
-        int initialConflicts = conflicts.size();
-        //they are in the same event set group
-        stateA.getTransitions().forEach((inputSymbol, targetStateA) -> {
-            State targetStateB = stateB.getTransitions().get(inputSymbol);
-            if(targetStateA != targetStateB){
-                int targetGroupA = stateGroupTransitionMap.getOrDefault(Pair.of(inputSymbol, stateA), -1);
-                int targetGroupB = stateGroupTransitionMap.getOrDefault(Pair.of(inputSymbol, stateA), -1);
-                for(int i = 0; i<currentStateGroups.size(); i++){
-                    Set<State> stateGroup = currentStateGroups.get(i);
-                    if(targetGroupA < 0 && stateGroup.contains(targetStateA)){
-                        targetGroupA = i;
-                    } else if(targetGroupB < 0 && stateGroup.contains(targetStateB)){
-                        targetGroupB = i;
-                    }
-                    if(targetGroupA >= 0 && targetGroupB >= 0){
-                        break;
-                    }
-                }
-                if(targetGroupA != targetGroupB){
-                    conflicts.add(Pair.of(stateA,stateB));
-                }
-                stateGroupTransitionMap.put(Pair.of(inputSymbol, stateA), targetGroupA);
-                stateGroupTransitionMap.put(Pair.of(inputSymbol, stateB), targetGroupB);
+    private Map<String, StateGroup> createStateGroupsByEvent(List<State> states){
+        Map<String, StateGroup> eventSet = new HashMap<>();
+        for(State state : states){
+            StringJoiner sb = new StringJoiner(",");
+            state.getTransitions().keySet().forEach(sb::add);
+            String key = sb.toString();
+            if(eventSet.containsKey(key)){
+                eventSet.get(key).states.add(state);
+            } else {
+                StateGroup stateGroup = new StateGroup(currentStateGroupIndex++, state);
+                eventSet.put(key, stateGroup);
             }
-        } );
-        return initialConflicts == conflicts.size();
+        }
+        System.out.println("Event set alapjan tovabb bontasok: ");
+        System.out.println(eventSet);
+        return eventSet;
     }
+
+    private List<Pair<Integer, Integer>> createStatePairs(){
+        List<Pair<Integer, Integer>> pairs = new ArrayList<>();
+        for(int rowIndex = 0; rowIndex< dfa.getStates().size(); rowIndex++){
+            State rowState = dfa.getStates().get(rowIndex);
+            for(int columnIndex = rowIndex+1; columnIndex < dfa.getStates().size()-1; columnIndex++ ){
+                pairs.add(Pair.of(rowState.getId(), dfa.getStates().get(columnIndex).getId()));
+            }
+        }
+        return pairs;
+    }
+
+
 }
