@@ -6,11 +6,14 @@ import hu.sze.stateminimalizer.dfa.model.StateGroup;
 import org.apache.commons.lang3.tuple.Pair;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.StringJoiner;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -26,6 +29,7 @@ public class Minimizer {
     private Map<Integer, State> statesByIds;
     private DFA dfa;
     private List<Pair<Integer, Integer>> pairs;
+    private List<StateGroup> minimalizedGroups;
 
     public DFA minimize(DFA initialDfa){
         dfa = removeUnreachableStates(initialDfa);
@@ -36,39 +40,66 @@ public class Minimizer {
         pairs = createStatePairs();
 
         setupStateGroupsByEventSets();
+        groupByTargetStateGroups();
 
+        minimalizedGroups = getMinimizedStateGroups();
+
+        System.out.println("final groups: ");
+        minimalizedGroups.forEach(stateGroup -> System.out.println(stateGroup.toString()));
+
+        return dfa;
+    }
+
+    private List<StateGroup> getMinimizedStateGroups() {
+        List<StateGroup> minimizedGroups = new ArrayList<>();
+
+        Set<Integer> stateIdsInGroup = new HashSet<>();
+        for(int rowIndex = 0; rowIndex< dfa.getStates().size(); rowIndex++){
+            State rowState = dfa.getStates().get(rowIndex);
+            boolean hasPair = checkRowMatchingGroups(rowState, rowIndex, stateIdsInGroup, minimizedGroups);
+            if(!stateIdsInGroup.contains(rowState.getId()) && !hasPair){
+                StateGroup newStateGroup = new StateGroup(
+                        minimizedGroups.size()+1);
+                newStateGroup.states.add(rowState);
+                minimizedGroups.add(newStateGroup);
+                stateIdsInGroup.add(rowState.getId());
+            }
+        }
+        return minimizedGroups;
+    }
+
+    private boolean checkRowMatchingGroups(State rowState, int rowIndex, Set<Integer> stateIdsInGroup, List<StateGroup> minimizedGroups ){
+        boolean hasPair = false;
+        for(int columnIndex = rowIndex+1; columnIndex < dfa.getStates().size(); columnIndex++ ){
+            State columnState = dfa.getStates().get(columnIndex);
+            if(!stateIdsInGroup.contains(columnState.getId()) && !isMarked(rowState, columnState)){
+                Optional<StateGroup> group = minimizedGroups.stream()
+                        .filter(stateGroup -> stateGroup.states.contains(rowState)).findFirst();
+                if(group.isPresent()){
+                    group.get().states.add(columnState);
+                    stateIdsInGroup.add(columnState.getId());
+                } else { //create new Group
+                    StateGroup newStateGroup = new StateGroup(minimizedGroups.size()+1);
+                    newStateGroup.states.add(rowState);
+                    newStateGroup.states.add(columnState);
+                    stateIdsInGroup.add(rowState.getId());
+                    stateIdsInGroup.add(columnState.getId());
+                    minimizedGroups.add(newStateGroup);
+                }
+                hasPair = true;
+            } //else nothing to do here
+        }
+        return hasPair;
+    }
+
+    private void groupByTargetStateGroups() {
         //left is the owner, right is a list of dependent pairs
         Map<Pair<Integer, Integer>, List<Pair<Integer, Integer>>> dependentPairs = new HashMap<>();
         pairs.stream().filter(statePair -> !isMarked(statePair))
                 .forEachOrdered(statePair -> {
                     checkPairTransitions(statePair, dependentPairs);
                 });
-        List<StateGroup> minimalizedGroups = new ArrayList<>();
-
-        for(int rowIndex = 0; rowIndex< dfa.getStates().size(); rowIndex++){
-            State rowState = dfa.getStates().get(rowIndex);
-            for(int columnIndex = rowIndex+1; columnIndex < dfa.getStates().size()-1; columnIndex++ ){
-                State columnState = dfa.getStates().get(columnIndex);
-               if(!isMarked(rowState, columnState)){
-                   Optional<StateGroup> group = minimalizedGroups.stream()
-                           .filter(stateGroup -> stateGroup.states.contains(rowState)).findFirst();
-                   if(group.isPresent()){
-                       group.get().states.add(columnState);
-                   } else { //create new Group
-                       StateGroup newStateGroup = createStateGroup();
-                       newStateGroup.states.add(rowState);
-                       newStateGroup.states.add(columnState);
-                       minimalizedGroups.add(newStateGroup);
-                   };
-
-               }
-            }
-        }
-
-        System.out.println("final groups: ");
-        minimalizedGroups.forEach(stateGroup -> System.out.println(stateGroup.toString()));
-
-        return dfa;
+        System.out.println("Dependent map: " + dependentPairs.toString());
     }
 
     private void markByIsFinalState() {
@@ -128,15 +159,19 @@ public class Minimizer {
     private void checkPairTransitions(Pair<Integer, Integer> statePair, Map<Pair<Integer, Integer>, List<Pair<Integer, Integer>>> dependentPairs) {
         State stateA = findStateById(statePair.getLeft());
         State stateB = findStateById(statePair.getRight());
+        if(stateA.getId() != stateB.getId()) {
 
-        for (Map.Entry<String, State> entry : stateA.getTransitions().entrySet()) {
-            String inputSymbol = entry.getKey();
-            State targetStateA = entry.getValue();
-            State targetStateB = stateB.getTransitions().get(inputSymbol);
-            if(areInDifferentStateGroup(targetStateA, targetStateB)) {
-                mark(statePair, dependentPairs);
-            } else {
-                addAsDependent(statePair, dependentPairs, targetStateA, targetStateB);
+            for (Map.Entry<String, State> entry : stateA.getTransitions().entrySet()) {
+                String inputSymbol = entry.getKey();
+                State targetStateA = entry.getValue();
+                State targetStateB = stateB.getTransitions().get(inputSymbol);
+                if(targetStateA.getId() != targetStateB.getId()) {
+                    if (areInDifferentStateGroup(targetStateA, targetStateB)) {
+                        mark(statePair, dependentPairs);
+                    } else {
+                        addAsDependent(statePair, dependentPairs, targetStateA, targetStateB);
+                    }
+                }
             }
         }
     }
@@ -150,9 +185,15 @@ public class Minimizer {
     }
 
     private boolean areInDifferentStateGroup(State targetStateA, State targetStateB) {
-        if(isMarked(targetStateA, targetStateB)){
+
+        if((targetStateA == null && targetStateB!= null) || (targetStateB == null && targetStateA != null)){
             return true;
-        } else {
+        }
+        if(targetStateA == null){ //both null
+            return false;
+        } else if(isMarked(targetStateA, targetStateB)){
+              return true;
+            } else {
                StateGroup targetStateGroupA = findStateGroup(targetStateA);
                StateGroup targetStateGroupB = findStateGroup(targetStateB);
                return targetStateGroupA.id != targetStateGroupB.id;
@@ -172,15 +213,18 @@ public class Minimizer {
                 .findAny()
                 .orElseGet(() -> nonFinalStateEventSetMap.values().stream()
                         .filter(stateGroup -> stateGroup.states.contains(state))
-                        .findAny().get());
+                        .findAny().orElse(null));
         }
 
     private List<Pair<Integer, Integer>> getDependentsPairsRecursive(Pair<Integer, Integer> owner, Map<Pair<Integer, Integer>, List<Pair<Integer, Integer>>> dependentPairs){
         List<Pair<Integer, Integer>> pairs = new ArrayList<>();
-        dependentPairs.get(owner).forEach(dependentPair -> {
-            pairs.add(dependentPair);
-            pairs.addAll(getDependentsPairsRecursive(dependentPair, dependentPairs));
-        });
+        List<Pair<Integer, Integer>> ownerPair = dependentPairs.get(owner);
+        if(ownerPair != null) {
+            ownerPair.forEach(dependentPair -> {
+                pairs.add(dependentPair);
+                pairs.addAll(getDependentsPairsRecursive(dependentPair, dependentPairs));
+            });
+        }
         return pairs;
     }
 
@@ -229,6 +273,7 @@ public class Minimizer {
                 }
             });
         }
+        reachableStates.sort(Comparator.comparingInt(State::getId));
         return reachableStates;
     }
 
@@ -267,7 +312,7 @@ public class Minimizer {
         List<Pair<Integer, Integer>> pairs = new ArrayList<>();
         for(int rowIndex = 0; rowIndex< dfa.getStates().size(); rowIndex++){
             State rowState = dfa.getStates().get(rowIndex);
-            for(int columnIndex = rowIndex+1; columnIndex < dfa.getStates().size()-1; columnIndex++ ){
+            for(int columnIndex = rowIndex+1; columnIndex < dfa.getStates().size(); columnIndex++ ){
                 pairs.add(Pair.of(rowState.getId(), dfa.getStates().get(columnIndex).getId()));
             }
         }

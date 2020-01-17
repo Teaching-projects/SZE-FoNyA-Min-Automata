@@ -20,6 +20,6 @@ public class StateGroup {
 
     @Override
     public String toString() {
-        return "state group: "+id+" states :" + states.stream().map(State::getName).collect(Collectors.joining(", ") );
+        return "State group "+id+" includes states: " + states.stream().map(State::getName).collect(Collectors.joining(", ") );
     }
 }
